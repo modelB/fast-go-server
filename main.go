@@ -3,6 +3,10 @@ package main
 import (
 	"fmt"
 	"net/http"
+	"flag"
+    "github.com/aws/aws-sdk-go/aws"
+    "github.com/aws/aws-sdk-go/aws/session"
+    "github.com/aws/aws-sdk-go/service/sqs"
 )
 
 func VerifyRouteAndMethod(w http.ResponseWriter, req *http.Request, route string, method string) bool {
