@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
@@ -33,9 +34,7 @@ func getQueueURL(svc *sqs.SQS) (*sqs.GetQueueUrlOutput, error) {
 
 func connect() (*sqs.SQS, *sqs.GetQueueUrlOutput) {
 	err := godotenv.Load(".env")
-	if err != nil {
-		log.Panic(err)
-	}
+	check(err)
 
 	sess := session.Must(session.NewSessionWithOptions(session.Options{
 		SharedConfigState: session.SharedConfigEnable,
@@ -45,9 +44,7 @@ func connect() (*sqs.SQS, *sqs.GetQueueUrlOutput) {
 	svc := sqs.New(sess)
 
 	queueURL, err := getQueueURL(svc)
-	if err != nil {
-		log.Panic(err)
-	}
+	check(err)
 
 	return svc, queueURL
 }
@@ -63,8 +60,16 @@ type Node struct {
 var cache = make(map[string]*Node)
 var head *Node
 var tail *Node
+var mutex = &sync.RWMutex{}
 
 func addNode(f *os.File, key string, value string) {
+	mutex.Lock()
+	_, ok := cache[key]
+	if ok {
+		mutex.Unlock()
+		f.WriteString("Node already exists\n")
+		return
+	}
 	if head == nil {
 		head = &Node{nil, key, nil}
 		tail = head
@@ -73,15 +78,20 @@ func addNode(f *os.File, key string, value string) {
 		tail = tail.next
 	}
 	cache[key] = tail
+	mutex.Unlock()
 	f.WriteString("Node added\n")
 }
 
 func removeNode(f *os.File, key string) {
+	mutex.Lock()
 	node, ok := cache[key]
+
 	if !ok {
+		mutex.Unlock()
 		f.WriteString("Not found\n")
 		return
 	}
+
 	if node.prev != nil {
 		node.prev.next = node.next
 	} else {
@@ -93,33 +103,41 @@ func removeNode(f *os.File, key string) {
 		tail = node.prev
 	}
 	delete(cache, key)
+	mutex.Unlock()
 	f.WriteString("Node deleted\n")
 }
 
 func getNode(f *os.File, key string) {
+	mutex.RLock()
 	node, ok := cache[key]
 	if !ok {
+		mutex.RUnlock()
 		f.WriteString("Not found\n")
 	} else {
 		f.WriteString(node.val + "\n")
+		mutex.RUnlock()
 	}
 }
 
 func getNodes(f *os.File) {
 	resString := "GetItems: "
+	mutex.RLock()
 	node := head
 	for node != nil {
 		resString += node.val + ", "
 		node = node.next
 	}
 
+	resString += "\n"
+	mutex.RUnlock()
+
 	f.WriteString(resString)
 }
 
 func worker(id int, f *os.File, jobs <-chan sqs.Message, results chan<- int) {
 	for m := range jobs {
-		fmt.Println("worker", id, "started  job", m)
-
+		// fmt.Println("worker", id, "started  job", m)
+		fmt.Println(len(cache))
 		method, ok := m.MessageAttributes["Method"]
 		if !ok {
 			f.WriteString("No method provided\n")
@@ -150,11 +168,11 @@ func worker(id int, f *os.File, jobs <-chan sqs.Message, results chan<- int) {
 			}
 		}
 
-		fmt.Println("worker", id, "finished job", m)
+		// fmt.Println("worker", id, "finished job", m)
 		results <- id
 	}
 }
-func processMessages(f *os.File, messages *sqs.ReceiveMessageOutput) {
+func processMessages(f *os.File, messages *sqs.ReceiveMessageOutput, mutex *sync.RWMutex, cache map[string]*Node, head *Node, tail *Node) {
 	numJobs := len(messages.Messages)
 	jobs := make(chan sqs.Message, numJobs)
 	results := make(chan int, numJobs)
@@ -235,7 +253,7 @@ func main() {
 	for {
 		msgResult := retrieveMessages(svc, queueURL)
 
-		processMessages(f, msgResult)
+		processMessages(f, msgResult, mutex, cache, head, tail)
 
 		deleteMessages(svc, queueURL.QueueUrl, msgResult)
 	}

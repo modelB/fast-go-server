@@ -10,6 +10,7 @@ import (
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/sqs"
+	"github.com/google/uuid"
 	"github.com/joho/godotenv"
 )
 
@@ -70,16 +71,18 @@ func SendMsg(svc *sqs.SQS, queueURL *string, method string, entry *Entry) error 
 		}
 	}
 
-	body := ""
+	body := " "
 
-	if method == "addItem" {
+	if method == "addItem" && entry.Comment != "" {
 		body = entry.Comment
 	}
 
 	_, err := svc.SendMessage(&sqs.SendMessageInput{
-		MessageAttributes: messageAttributes,
-		MessageBody: aws.String(body),
-		QueueUrl:    queueURL,
+		MessageAttributes:      messageAttributes,
+		MessageBody:            aws.String(body),
+		MessageGroupId:         aws.String("groupA"),
+		MessageDeduplicationId: aws.String(uuid.New().String()),
+		QueueUrl:               queueURL,
 	})
 	check(err)
 
@@ -101,7 +104,7 @@ func main() {
 	json.Unmarshal(byteValue, &entries)
 
 	for i := 0; i < len(entries); i++ {
-		randOption := rand.Intn(8)
+		randOption := rand.Intn(4)
 		entry := entries[i]
 
 		switch randOption {
@@ -109,19 +112,22 @@ func main() {
 			// addItem
 			err = SendMsg(svc, queueURL.QueueUrl, "addItem", &entry)
 			check(err)
-			log.Println(("addItem message sent to queue with address: " + entries[i].Address))
 		case 1:
 			// removeItem (or invalid if already removed)
-			randIndex := rand.Intn(i)
-			err = SendMsg(svc, queueURL.QueueUrl, "removeItem", &entries[randIndex])
-			check(err)
+			if i > 0 {
+				randIndex := rand.Intn(i)
+				err = SendMsg(svc, queueURL.QueueUrl, "removeItem", &entries[randIndex])
+				check(err)
+			}
 			i--
 		case 2:
 			// getItem (or invalid if already removed)
-			randIndex := rand.Intn(i)
-			err = SendMsg(svc, queueURL.QueueUrl, "getItem", &entries[randIndex])
-			check(err)
-			i--
+			if i > 0 {
+				randIndex := rand.Intn(i)
+				err = SendMsg(svc, queueURL.QueueUrl, "getItem", &entries[randIndex])
+				check(err)
+				i--
+			}
 		case 3:
 			// getItems
 			err = SendMsg(svc, queueURL.QueueUrl, "getItems", &entry)
